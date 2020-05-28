@@ -16,8 +16,8 @@ Requires the following (pretty self explanatory) env vars:
 The only requirement is to have the above mentioned env vars in place before
 importing. Cognito credentials will have the last precedence in the credential
 provider chain. This means that providing a default profile or IAM credentials
-via env vars will be considered first with boto3 looks for credentials. If one or
-more of the COGNITO env vars above, but not all of them are found an exception will
+via env vars will be considered first when boto3 looks for credentials. If one or
+more, but not all, of the COGNITO env vars above are found an exception will
 be raised.
 
 .. code-block:: python
