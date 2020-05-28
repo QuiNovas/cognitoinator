@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name='cognito-iam-provider',
-    version='0.0.1',
+    version='0.0.2',
     description='Assumes an IAM role in boto3 using Cognito credentials',
     author='Mathew Moon',
     author_email='mmoon@quinovas.com',
