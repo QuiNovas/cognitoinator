@@ -21,6 +21,7 @@ more of the COGNITO env vars above, but not all of them are found an exception w
 be raised.
 
 .. code-block:: python
+
   import boto3
   import CognitoIamProvider
 
