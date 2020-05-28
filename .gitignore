@@ -5,6 +5,9 @@
 
 # User-specific stuff:
 .idea/
+run.sh
+.env
+test.py
 
 # CMake
 cmake-build-debug/

@@ -1,5 +1,5 @@
 ============================
-cognito-iam-provider
+cognito-assume-role
 ============================
 
 Makes boto3 fetch temporary credentials using Federated Web Identities for Cognito users
@@ -9,8 +9,8 @@ Requires the following (pretty self explanatory) env vars:
 * COGNITO_PASSWORD
 * COGNITO_USER_POOL_ID
 * COGNITO_IDENTITY_POOL_ID
-* OGNITO_APP_ID
-* AWS_ROLE_ARN
+* COGNITO_APP_ID
+* AWS_ROLE_ARN (Used by boto3 CredentialProvider)
 
 **USAGE**:
 The only requirement is to have the above mentioned env vars in place before
