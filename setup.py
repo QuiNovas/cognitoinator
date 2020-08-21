@@ -12,7 +12,7 @@ setup(
     license='Apache 2.0',
     long_description=io.open('README.rst', encoding='utf-8').read(),
     long_description_content_type='text/x-rst',
-    packages=['CognitoIamProvider'],
+    packages=['cognito-assume-role'],
     package_dir={'cognito_assume_role': 'src/cognito_assume_role'},
     install_requires=["boto3", "botocore"],
     classifiers=[
