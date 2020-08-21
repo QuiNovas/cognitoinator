@@ -23,7 +23,7 @@ be raised.
 .. code-block:: python
 
   import boto3
-  import CognitoIamProvider
+  import cognito_assume_role
 
   client = boto3.client("s3")
   client.list_buckets()
