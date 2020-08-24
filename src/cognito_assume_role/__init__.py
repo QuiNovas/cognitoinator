@@ -1,38 +1,93 @@
 #!/usr/bin/env python3.8
+
+from pprint import pprint
+from json import loads
 from logging import getLogger, INFO
 from os import environ
 from boto3 import client, set_stream_logger
 from botocore import utils, UNSIGNED
 from botocore.exceptions import ClientError
 from botocore.config import Config
+from warrant.aws_srp import AWSSRP
+from warrant import aws_srp
 
 set_stream_logger(name='botocore')
 logger = getLogger('botocore')
 logger.setLevel(INFO)
 
+environ['COGNITO_AUTH_TYPE'] = environ.get('COGNITO_AUTH_TYPE', 'USER_SRP_AUTH')
+environ['AWS_REGION'] = environ.get('AWS_REGION', 'us-east-1')
+idp = client('cognito-idp', region_name=environ['AWS_REGION'], config=Config(signature_version=UNSIGNED))
+
 def CognitoLogin(retry=True):
-    if environ.get('AWS_REFRESH_TOKEN'):
-        AUTH_FLOW = 'REFRESH_TOKEN_AUTH'
-        AUTH_PARAMETERS = {'REFRESH_TOKEN': environ['AWS_REFRESH_TOKEN']}
-    else:
+    def SrpAuth():
+        srp = AWSSRP(
+            username=environ['COGNITO_USERNAME'],
+            password=environ['COGNITO_PASSWORD'],
+            pool_id=environ['COGNITO_USER_POOL_ID'],
+            client_id=environ['COGNITO_APP_ID'],
+            pool_region=environ['AWS_REGION']
+        )
+
+        AUTH_PARAMETERS = {
+            "CHALLENGE_NAME": "SRP_A",
+            "USERNAME": environ['COGNITO_USERNAME'],
+            "SRP_A": srp.get_auth_params()["SRP_A"]
+        }
+
+        auth = idp.initiate_auth(
+            AuthFlow='USER_SRP_AUTH',
+            AuthParameters=AUTH_PARAMETERS,
+            ClientId=environ['COGNITO_APP_ID'],
+            ClientMetadata=loads(environ.get('COGNITO_METADATA', '{}'))
+        )
+
+        response = srp.process_challenge(auth["ChallengeParameters"])
+
+        auth = idp.respond_to_auth_challenge(
+            ClientId=environ['COGNITO_APP_ID'],
+            ChallengeName="PASSWORD_VERIFIER",
+            ChallengeResponses=response
+        )['AuthenticationResult']
+
+        return auth
+
+    def PasswordAuth():
         AUTH_FLOW = 'USER_PASSWORD_AUTH'
         AUTH_PARAMETERS = {'USERNAME': environ['COGNITO_USERNAME'], 'PASSWORD': environ['COGNITO_PASSWORD']}
-
-    idp = client('cognito-idp', region_name=environ['AWS_REGION'], config=Config(signature_version=UNSIGNED))
-    try:
         auth = idp.initiate_auth(
             AuthFlow=AUTH_FLOW,
             AuthParameters=AUTH_PARAMETERS,
             ClientId=environ['COGNITO_APP_ID'],
             ClientMetadata={'UserPoolId': environ['COGNITO_USER_POOL_ID']}
         )['AuthenticationResult']
-        environ['AWS_REFRESH_TOKEN'] = auth['RefreshToken']
+        return auth
+
+    def RefreshAuth():
+        AUTH_FLOW = 'REFRESH_TOKEN_AUTH'
+        AUTH_PARAMETERS = {'REFRESH_TOKEN': environ['AWS_REFRESH_TOKEN']}
+        auth = idp.initiate_auth(
+            AuthFlow=AUTH_FLOW,
+            AuthParameters=AUTH_PARAMETERS,
+            ClientId=environ['COGNITO_APP_ID'],
+            ClientMetadata={'UserPoolId': environ['COGNITO_USER_POOL_ID']}
+        )['AuthenticationResult']
+        return auth
+
+    try:
+        if environ.get('AWS_REFRESH_TOKEN'):
+            auth = RefreshAuth()
+        else:
+            auth = SrpAuth() if environ['COGNITO_AUTH_TYPE'] == 'USER_SRP_AUTH' else PasswordAuth()
+            environ['AWS_REFRESH_TOKEN'] = auth['RefreshToken']
         return auth['IdToken']
     except (Exception, ClientError) as e:
         logger.error(e)
         if 'AWS_REFRESH_TOKEN' in environ: del environ['AWS_REFRESH_TOKEN']
         if retry:
             return CognitoLogin(retry=False)
+
+
 
 def GetWebIdentityToken():
     idToken = CognitoLogin()
@@ -76,7 +131,6 @@ def FileWebIdentityTokenLoader__call__(self):
     return token
 
 
-environ['AWS_REGION'] = environ.get('AWS_REGION', 'us-east-1')
 utils.IsCognitoUser = IsCognitoUser
 utils.CognitoLogin = CognitoLogin
 utils.GetWebIdentityToken = GetWebIdentityToken
