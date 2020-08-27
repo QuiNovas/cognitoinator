@@ -13,14 +13,15 @@ set_stream_logger(name="botocore")
 logger = getLogger("botocore")
 logger.setLevel(INFO)
 
-AWS_REGION = environ.get('AWS_REGION', 'us-east-1')
+AWS_REGION = environ.get("AWS_REGION", "us-east-1")
 IDP = client(
     "cognito-idp",
     region_name=AWS_REGION,
-    config=Config(signature_version=UNSIGNED),
+    config=Config(signature_version=UNSIGNED)
 )
 
-IDENTITY = client('cognito-identity', region_name=AWS_REGION)
+IDENTITY = client("cognito-identity", region_name=AWS_REGION)
+
 
 def is_cognito():
     envList = [
@@ -41,6 +42,7 @@ def is_cognito():
         )
     return bool(not missing)
 
+
 def patch_boto(role):
     def token_loader(self):
         if is_cognito():
@@ -57,6 +59,7 @@ def patch_boto(role):
     utils.CognitoLogin = role.cognito_login
     utils.GetWebIdentityToken = role.GetWebIdentityToken
 
+
 class CognitoAssumeRole:
     def __init__(self):
         self.auth = None
@@ -72,6 +75,7 @@ class CognitoAssumeRole:
             else:
                 auth = self._login()
                 environ["AWS_REFRESH_TOKEN"] = auth["RefreshToken"]
+            environ["AWS_ID_TOKEN"] = auth["IdToken"]
             return auth["IdToken"]
         except (Exception, ClientError) as e:
             logger.error(e)

@@ -29,7 +29,7 @@ be raised.
 .. code-block:: python
 
   import boto3
-  from cognito_assume_role import srp_auth
+  from cognito_assume_role import user_srp
 
   client = boto3.client("s3")
   client.list_buckets()
@@ -40,7 +40,7 @@ be raised.
 .. code-block:: python
 
   import boto3
-  from cognito_assume_role import password_auth
+  from cognito_assume_role import user_password
 
   client = boto3.client("s3")
   client.list_buckets()
