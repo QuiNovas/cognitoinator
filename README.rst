@@ -5,7 +5,10 @@ cognito-assume-role
 
 Currently supports USER_SRP_AUTH and USER_PASSWORD_AUTH using enhanced Cognito auth flow.
 Custom auth flows or administrative auth are not currently supported although I suppose
-you could monkey patch the needed code.
+you could monkey patch the needed code. It was written using only public methods exposed by the boto3/botocore
+API's to help ensure that changes to boto3 won't break any (what would be otherwise) monkey patched code.
+This should also maintain the ability to use this library for your boto3 calls that are not using Cognito within
+the same script by simply passing a normal boto3 client credential argument.
 
 **USAGE**:
 This module can insert a botocore.credentials.CredentialProvider into the provider chain.
@@ -16,19 +19,20 @@ we provide three functions:
 - Session (wraps boto3.session.Session())
 
 All three of these functions accept all normal boto3 args and kwargs plus some that are specific to this module.
-We provide two ways of providing the initial credentials.
+We provide three ways of providing the initial credentials.
 
 
 **Env vars**
 These will take affect before any other credential provider, including the standard env provider that looks for AWS_SECRET_ACCESS_KEY and AWS_ACCESS_KEY_ID.
 If one or more of the following non-optional variables are found in environ then we will automatically go to env based credential mapping
-* COGNITO_USERNAME
-* COGNITO_PASSWORD
-* COGNITO_USER_POOL_ID
-* COGNITO_IDENTITY_POOL_ID
-* COGNITO_APP_ID
-* COGNITO_METADATA (Deserialized and passed as ClientMetadata in boto3.client("cognito-idp").initiate_auth()) - Optional
-* AWS_ROLE_ARN - Optional
+
+- COGNITO_USERNAME
+- COGNITO_PASSWORD
+- COGNITO_USER_POOL_ID
+- COGNITO_IDENTITY_POOL_ID
+- COGNITO_APP_ID
+- COGNITO_METADATA (Deserialized and passed as ClientMetadata in boto3.client("cognito-idp").initiate_auth()) - Optional
+- AWS_ROLE_ARN - Optional
 
 
 **Profile**
@@ -55,15 +59,16 @@ All values except for region and metadata are required if using a profile. Using
 
 .. code-block:: json
 
-  username=myusername
-  password=***********
-  app_id=1234567890
-  user_pool_id=abcdefg
-  identity_pool_id=us-east-1:1234567890
-  region=us-east-1
-  metadata={"foo": "bar"}
-  auth_type=user_srp
-
+  {
+    "username": "myusername",
+    "password": "***********",
+    "app_id": "1234567890",
+    "user_pool_id": "abcdefg",
+    "identity_pool_id": "us-east-1:1234567890",
+    "region": "us-east-1",
+    "metadata": {"foo": "bar"},
+    "auth_type": "user_srp"
+  }
 
 Same rules apply for required values as when using a profile. Direct configuration is done by passing the config dictionary to kwarg cognito_config when creating a client, resource, or Session.
 Note that cognito_profile and cognito_config are mutually exclusive. Trying to use both at once will raise an Assertion exception.
@@ -119,11 +124,15 @@ credentials updated by passing "server=True".
 
 
 **Creating a session that we can reuse for multiple clients**
+
+.. code-block:: python
+
   from cognito_assume_role import Session
   session = Session(auth_type="user_srp", region_name="us-east-2")
   s3 = session.client("s3")
   dynamo = resource("dynamodb")
   table = dynamo.Table("my_table")
+
 
 **Precedence of CredentialProviders**
 The order of resolution for credential providers remains unchanged except for setting environment variables for Cognito will take affect
@@ -132,6 +141,7 @@ before any AWS credential environment variables.
 **Precedence of arguments**
 Any value that can be defined in either an environment variable, explicitly passed as a kwarg ( passed to client, resource, or Session)
 or can be part of a config or profile is resolved in the following order:
+
 - explicit arguments
 - specified by config or profile
 - environment variables
