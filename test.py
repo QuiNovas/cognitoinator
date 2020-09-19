@@ -1,8 +1,17 @@
-#!/usr/bin/env python3.8
-import boto3
-from cognito_assume_role import user_password
 
-c = boto3.client("s3")
-while True:
-    res = c.list_buckets()
-    print(res['ResponseMetadata']['RequestId'])
+from cognito_assume_role import TokenFetcher
+
+s = TokenFetcher()
+# Strings shortened for brevity
+print(s.id_token[-10:-1])
+print(s.access_token[-10:-1])
+print(s.refresh_token[-10:-1])
+print(s.expires)
+
+"""
+Results in:
+  6xAb_vMKv
+  4Ruc_TB_h
+  m3Htft_Op
+  2020-09-19T05:16:31
+"""
