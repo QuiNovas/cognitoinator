@@ -15,10 +15,11 @@ setup(
     packages=["cognito_assume_role"],
     package_dir={"cognito_assume_role": "src/cognito_assume_role"},
     install_requires=["boto3", "botocore", "warrant"],
+    python_requires=">=3.8",
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: Apache Software License",
-        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.8",
     ],
 )
