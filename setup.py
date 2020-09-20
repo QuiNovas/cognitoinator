@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name="cognito-assume-role",
-    version="0.0.10",
+    version="0.0.11",
     description="Assumes an IAM role in boto3 using Cognito credentials",
     author="Mathew Moon",
     author_email="mmoon@quinovas.com",
@@ -17,7 +17,7 @@ setup(
     install_requires=["boto3", "botocore", "warrant"],
     python_requires=">=3.8",
     classifiers=[
-        "Development Status :: 5 - Production/Stable",
+        "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3.8",
