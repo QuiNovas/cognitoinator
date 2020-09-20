@@ -1,11 +1,11 @@
 #!/usr/bin/env python3.8
 from threading import Thread
+from os import path, remove, access, environ, W_OK
 from uuid import uuid4
 from datetime import datetime, timedelta
 from time import sleep
 from json import loads
 from logging import getLogger, INFO
-from os import environ
 from boto3 import client, set_stream_logger
 from botocore import UNSIGNED
 from botocore.config import Config
@@ -80,6 +80,18 @@ class TokenFetcher():
         if server:
             self.start_server()
 
+    def __del__(self):
+        self.clear_token_cache()
+
+    def clear_token_cache(self):
+        # We need to delete the credentials cache if it exists
+        if self.cache_id:
+            cache_dir = self.cache.CACHE_DIR
+            cache_file = path.join(cache_dir, f"{self.cache_id}.json")
+            try:
+                remove(cache_file)
+            except FileNotFoundError as e:
+                logger.info(f"{e}: Could not remove token cache {cache_file}.")
 
     def fetch(self):
         self.provider.cognito_login(cache=False)
@@ -96,7 +108,7 @@ class TokenFetcher():
     @property
     def id_token(self):
         try:
-            return self.cache.__getitem__(self.cache_id).get("id_token")
+            return self.provider.cognito_id_token
         except KeyError:
             logger.debug(f"Could not access cache {self.cache_id}. Possible race condition?")
 
@@ -123,7 +135,7 @@ class TokenFetcher():
 
     def get_login(self):
         while True:
-            while self.provider.cognito_token_expires < datetime.now() - timedelta(seconds=60):
+            while datetime.strptime(self.provider.cognito_token_expires, "%Y-%m-%dT%H:%M:%S") < datetime.now() - timedelta(seconds=60):
                 sleep(5)
             self.provider.cognito_login()
             self.cache.__setitem__(
@@ -148,20 +160,21 @@ class CognitoIdentity(CredentialProvider):
     cognito_access_token = None
     cognito_token_expires = None
     auth = None
-    cache = JSONFileCache()
-    cache_id = str(uuid4())
+    tz = datetime.now().astimezone().tzinfo
+    token_cache = None
 
-    def __init__(self, auth_type="user_srp", config={}, region_name=None):
+    def __init__(self, auth_type="user_srp", config={}, region_name=None, cache_id=None, cache_dir=None):
+        if cache_id: self.set_cache(cache_dir)
         self.config = get_cognito_config(config) or get_cognito_config_from_env() or {}
         self.config["region_name"] = region_name or config.get("region") or environ.get("AWS_DEFAULT_REGION")
-
+        self.cache_id = cache_id
         self.IDP = client(
             "cognito-idp",
             region_name=self.config["region_name"],
             config=Config(signature_version=UNSIGNED)
         )
         self.IDENTITY = client("cognito-identity", region_name=self.config["region_name"])
-
+        self.cognito_refresh_token = None
         auth_type = auth_type or environ.get("COGNITO_AUTH_TYPE", "user_srp")
         if auth_type == "user_srp":
             self.auth_func = self._srp_auth
@@ -169,6 +182,27 @@ class CognitoIdentity(CredentialProvider):
             self.auth_func = self._password_auth
         else:
             raise Exception("kwarg auth_type must be one of user_srp or user_password")
+
+        self.cognito_refresh_token = None
+
+    def __del__(self):
+        # We need to delete the credentials cache if it exists
+        if self.cache_id:
+            cache_file = self.token_cache._convert_cache_key(self.cache_id)
+            try:
+                remove(cache_file)
+            except FileNotFoundError as e:
+                logger.info(f"{e}: Could not remove token cache {cache_file}.")
+
+    def set_cache(self, cache_dir):
+        if cache_dir:
+            if path.isdir(cache_dir) and access(cache_dir, W_OK):
+                self.token_cache = JSONFileCache(working_dir=cache_dir)
+            else:
+                raise Exception("cache directory is not writable")
+
+        else:
+            self.token_cache = JSONFileCache()
 
     def load(self):
         if self.config:
@@ -189,16 +223,19 @@ class CognitoIdentity(CredentialProvider):
     def _login(self):
         return self.auth_func()
 
-    def cognito_login(self, cache=False):
+    def cognito_login(self, cache=True):
         try:
-            if self.config.get("cognito_refresh_token"):
+            if self.cognito_refresh_token:
                 auth = self.refresh_auth()
             else:
                 auth = self._login()
 
-            expires_in = datetime.now() + timedelta(seconds=auth["ExpiresIn"])
-            if cache:
-                self.cache.__setitem__(
+            # Get the datetime that the token expires in
+            expires_in = datetime.now(tz=self.tz) + timedelta(seconds=auth["ExpiresIn"])
+
+            # Writing this to the cache lets us get it later from the session
+            if self.cache_id and cache:
+                self.token_cache.__setitem__(
                     self.cache_id,
                     {
                         "id_token": auth["IdToken"],
@@ -212,7 +249,6 @@ class CognitoIdentity(CredentialProvider):
             self.cognito_access_token = auth["AccessToken"]
             self.cognito_token_expires = expires_in
             self.cognito_refresh_token = auth["RefreshToken"]
-
             return auth["IdToken"]
         except (Exception, ClientError) as e:
             logger.info(e)
@@ -264,19 +300,19 @@ class CognitoIdentity(CredentialProvider):
             AuthFlow="USER_PASSWORD_AUTH",
             AuthParameters=AUTH_PARAMETERS,
             ClientId=self.config["app_id"],
-            ClientMetadata=loads(environ.get("COGNITO_METADATA", "{}")),
+            ClientMetadata=loads(self.config.get("metadata", "{}")),
         )["AuthenticationResult"]
 
         self.auth = auth
         return auth
 
     def refresh_auth(self):
-        AUTH_PARAMETERS = {"REFRESH_TOKEN": environ["AWS_REFRESH_TOKEN"]}
+        AUTH_PARAMETERS = {"REFRESH_TOKEN": self.cognito_refresh_token}
         auth = self.IDP.initiate_auth(
             AuthFlow="REFRESH_TOKEN_AUTH",
             AuthParameters=AUTH_PARAMETERS,
             ClientId=self.config["app_id"],
-            ClientMetadata=loads(environ.get("COGNITO_METADATA", "{}")),
+            ClientMetadata=loads(self.config.get("metadata", "{}")),
         )["AuthenticationResult"]
 
         self.auth = auth
@@ -301,11 +337,15 @@ class CognitoIdentity(CredentialProvider):
                 opts["CustomRoleArn"] = environ["AWS_ROLE_ARN"]
 
             credentials = self.IDENTITY.get_credentials_for_identity(**opts)
+
+            # We want to refresh whenever either the id token or iam is about to expire, whichever comes first
+            expire_time = self.cognito_token_expires if self.cognito_token_expires < credentials["Credentials"]["Expiration"] else credentials["Credentials"]["Expiration"]
+
             return {
                 "access_key": credentials["Credentials"]["AccessKeyId"],
                 "secret_key": credentials["Credentials"]["SecretKey"],
                 "token": credentials["Credentials"]["SessionToken"],
-                "expiry_time": credentials["Credentials"]["Expiration"]
+                "expiry_time": expire_time
             }
 
         return assume_role

@@ -54,7 +54,6 @@ Config files take the following form:
 
 All values except for region and metadata are required if using a profile. Using a profile is done by passing the kwarg "cognito_profile=<profile name>" to client, Session, or resource.
 
-
 **Direct configuration**
 
 .. code-block:: json
@@ -84,6 +83,37 @@ can use TokenFetcher. Instantiating the TokenFetcher will write the results from
 on your object. Subsequently you can call TokenFetcher.fetch() to update those credentials. For long running processes you can start a daemon that will keep the
 credentials updated by passing "server=True".
 
+
+**Accessing Cognito tokens from a Session**
+If creating a Session directly the cognito id, refresh, and access tokens, as well as the expires time are available as properties on the Session object
+unless cache_credentials=False. Note that this uses boto3.credentialsJSONFileCache() which by default places the files in ~/.aws/boto/cache. If this will cause a proble
+eg: (your script is running as a user who has no home, or you need to ensure that other users cannot snoop on the cache) then you can pass a specific directory
+with cache_dir=/path/to/my/permission/and/acl/secured/directory. Passing cache_credentials=False and a value for cach_dir will result in ValueError. 
+
+
+Properties are listed below.
+
+- Session().id_token
+- Session().access_token
+- Session().refresh_token
+- Session().token_expires
+- Session().cognito_tokens (All of the above in a dict)
+
+Because of how boto3 generates clients there is no way to access the "parent" session. This means that to use this feature you will need to create a Session()
+object and then create your clients/resources off of that Session(). Example:
+
+.. code-block:: python
+
+  from cognito_assume_role import Session
+
+  session = Session()
+  s3 = session.s3()
+  s3.list_buckets()
+  print(session.token_expires)
+
+  # Outputs 2020-09-19T23:17:28CDT
+
+
 .. code-block:: python
 
   from cognito_assume_role import TokenFetcher
@@ -101,7 +131,7 @@ credentials updated by passing "server=True".
     4Ruc_TB_h
     m3Htft_Op
     2020-09-19T05:16:31
-
+  """
 
 **Creating a client that uses a config**
 
@@ -145,6 +175,3 @@ or can be part of a config or profile is resolved in the following order:
 - explicit arguments
 - specified by config or profile
 - environment variables
-
-
-Next minor release will automatically look for configuration files in the same way that boto3 does for standard credentials.
