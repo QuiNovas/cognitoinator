@@ -5,14 +5,14 @@ from botocore.configloader import load_config
 from botocore.session import get_session
 from .providers import CognitoIdentity, TokenFetcher
 
-DEFAULT_SESSION = None
+COGNITO_DEFAULT_SESSION = None
 
 
 def _get_default_session(**kwargs):
-    global DEFAULT_SESSION
-    if DEFAULT_SESSION is None:
-        DEFAULT_SESSION = Session(**kwargs)
-    return DEFAULT_SESSION
+    global COGNITO_DEFAULT_SESSION
+    if COGNITO_DEFAULT_SESSION is None:
+        COGNITO_DEFAULT_SESSION = Session(**kwargs)
+    return COGNITO_DEFAULT_SESSION
 
 
 def Session(**kwargs):
