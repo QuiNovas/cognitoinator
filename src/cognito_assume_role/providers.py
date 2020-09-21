@@ -1,10 +1,11 @@
 #!/usr/bin/env python3.8
 from threading import Thread
+from io import StringIO
 from os import path, remove, access, environ, W_OK
 from uuid import uuid4
 from datetime import datetime, timedelta
 from time import sleep
-from json import loads
+import json
 from logging import getLogger, INFO
 from boto3 import client, set_stream_logger
 from botocore import UNSIGNED
@@ -42,7 +43,7 @@ def get_cognito_config_from_env():
             "username": environ["COGNITO_USERNAME"],
             "user_pool_id": environ["COGNITO_USER_POOL_ID"],
             "identity_pool_id": environ["COGNITO_IDENTITY_POOL_ID"],
-            "metadata": loads(environ.get("COGNITO_METADATA", "{}"))
+            "metadata": json.loads(environ.get("COGNITO_METADATA", "{}"))
         }
     else:
         res = {}
@@ -70,139 +71,110 @@ def get_cognito_config(config):
     return config
 
 
-class TokenFetcher():
-    cache_id = str(uuid4())
-    cache = JSONFileCache()
+class TokenCache:
+    def __init__(self, cache):
+        self.cache = cache
 
-    def __init__(self, auth_type="user_srp", config={}, region_name=None, server=False):
-        self.provider = CognitoIdentity(auth_type=auth_type, config=config, region_name=region_name)
-        self.fetch()
+    def cache_tokens(self, tokens):
+        if isinstance(tokens.get("token_expires"), datetime):
+            tokens["token_expires"] = str(tokens["token_expires"])
+
+        if isinstance(self.cache, StringIO):
+            new_cache = StringIO()
+            new_cache.write(json.dumps(tokens))
+            new_cache.seek(0)
+            self.cache = new_cache
+
+        if isinstance(self.cache, str):
+            logger.info("Caching to file")
+            with open(self.cache, "w") as f:
+                json.dump(tokens, f)
+
+    @property
+    def tokens(self):
+        try:
+            if isinstance(self.cache, StringIO):
+                tokens = json.loads(self.cache.read())
+            else:
+                with open(self.cache, "r") as f:
+                    tokens = json.load(f)
+        except json.decoder.JSONDecodeError as e:
+            if e.msg == "Expecting value":
+                tokens = {}
+            else:
+                raise e
+
+        return tokens
+
+
+class TokenFetcher():
+    def __init__(self, auth_type="user_srp", config={}, region_name=None, server=False, token_cache=None):
+        self.provider = CognitoIdentity(auth_type=auth_type, config=config, region_name=region_name, token_cache=token_cache)
+        self.provider.cognito_login()
         if server:
             self.start_server()
 
-    def __del__(self):
-        self.clear_token_cache()
-
-    def clear_token_cache(self):
-        # We need to delete the credentials cache if it exists
-        if self.cache_id:
-            cache_dir = self.cache.CACHE_DIR
-            cache_file = path.join(cache_dir, f"{self.cache_id}.json")
-            try:
-                remove(cache_file)
-            except FileNotFoundError as e:
-                logger.info(f"{e}: Could not remove token cache {cache_file}.")
-
     def fetch(self):
-        self.provider.cognito_login(cache=False)
-        self.cache.__setitem__(
-            self.cache_id,
-            {
-                "id_token": self.provider.cognito_id_token,
-                "access_token": self.provider.cognito_access_token,
-                "token_expires": self.provider.cognito_token_expires,
-                "refresh_token": self.provider.cognito_refresh_token
-            }
-        )
+        self.provider.cognito_login()
+        return self.provider.token_cache.tokens
+
+    @property
+    def tokens(self):
+        return self.provider.token_cache.tokens
 
     @property
     def id_token(self):
-        try:
-            return self.provider.cognito_id_token
-        except KeyError:
-            logger.debug(f"Could not access cache {self.cache_id}. Possible race condition?")
+        return self.provider.cognito_tokens["id_token"]
 
     @property
     def access_token(self):
-        try:
-            return self.cache.__getitem__(self.cache_id).get("access_token")
-        except KeyError:
-            logger.debug(f"Could not access cache {self.cache_id}. Possible race condition?")
+        return self.provider.cognito_tokens["access_token"]
 
     @property
     def refresh_token(self):
-        try:
-            return self.cache.__getitem__(self.cache_id).get("refresh_token")
-        except KeyError:
-            logger.debug(f"Could not access cache {self.cache_id}. Possible race condition?")
+        return self.provider.cognito_tokens["refresh_token"]
 
     @property
     def expires(self):
-        try:
-            return self.cache.__getitem__(self.cache_id).get("token_expires")
-        except KeyError:
-            logger.debug(f"Could not access cache {self.cache_id}. Possible race condition?")
+        return self.provider.cognito_tokens["token_expires"]
 
-    def get_login(self):
+    def login_loop(self):
         while True:
-            while datetime.strptime(self.provider.cognito_token_expires, "%Y-%m-%dT%H:%M:%S") < datetime.now() - timedelta(seconds=60):
+            while datetime.strptime(self.provider.cognito_tokens["token_expires"], "%Y-%m-%dT%H:%M:%S") < datetime.now() - timedelta(seconds=60):
                 sleep(5)
             self.provider.cognito_login()
-            self.cache.__setitem__(
-                "cognito_tokens",
-                {
-                    "id_token": self.provider.cognito_id_token,
-                    "access_token": self.provider.cognito_access_token,
-                    "token_expires": self.provider.cognito_token_expires,
-                    "refresh_token": self.provider.cognito_refresh_token
-                }
-            )
 
     def start_server(self):
-        Thread(target=self.get_login, daemon=True).start()
+        Thread(target=self.login_loop, daemon=True).start()
 
 
 class CognitoIdentity(CredentialProvider):
     METHOD = 'cognito-identity'
+    CANONICAL_NAME = 'customCognitoIdentity'
     api_credential_expiration = None
-    cognito_refresh_token = None
-    cognito_id_token = None
-    cognito_access_token = None
-    cognito_token_expires = None
+    cognito_tokens = {}
     auth = None
     tz = datetime.now().astimezone().tzinfo
-    token_cache = None
 
-    def __init__(self, auth_type="user_srp", config={}, region_name=None, cache_id=None, cache_dir=None):
-        if cache_id: self.set_cache(cache_dir)
+    def __init__(self, auth_type="user_srp", config={}, region_name=None, token_cache=None):
+        super().__init__(self)
+        self.token_cache = TokenCache(StringIO() if token_cache is None else token_cache)
         self.config = get_cognito_config(config) or get_cognito_config_from_env() or {}
         self.config["region_name"] = region_name or config.get("region") or environ.get("AWS_DEFAULT_REGION")
-        self.cache_id = cache_id
         self.IDP = client(
             "cognito-idp",
             region_name=self.config["region_name"],
             config=Config(signature_version=UNSIGNED)
         )
         self.IDENTITY = client("cognito-identity", region_name=self.config["region_name"])
-        self.cognito_refresh_token = None
+        self.cognito_tokens["refresh_token"] = None
         auth_type = auth_type or environ.get("COGNITO_AUTH_TYPE", "user_srp")
         if auth_type == "user_srp":
-            self.auth_func = self._srp_auth
+            self._auth_func = self._srp_auth
         elif auth_type == "user_password":
-            self.auth_func = self._password_auth
+            self._auth_func = self._password_auth
         else:
             raise Exception("kwarg auth_type must be one of user_srp or user_password")
-
-        self.cognito_refresh_token = None
-
-    def __del__(self):
-        # We need to delete the credentials cache if it exists
-        if self.cache_id:
-            cache_file = self.token_cache._convert_cache_key(self.cache_id)
-            try:
-                remove(cache_file)
-            except FileNotFoundError as e:
-                logger.info(f"{e}: Could not remove token cache {cache_file}.")
-
-    def set_cache(self, cache_dir):
-        if cache_dir:
-            if path.isdir(cache_dir) and access(cache_dir, W_OK):
-                self.token_cache = JSONFileCache(working_dir=cache_dir)
-            else:
-                raise Exception("cache directory is not writable")
-
-        else:
-            self.token_cache = JSONFileCache()
 
     def load(self):
         if self.config:
@@ -221,39 +193,32 @@ class CognitoIdentity(CredentialProvider):
         return res
 
     def _login(self):
-        return self.auth_func()
+        return self._auth_func()
 
-    def cognito_login(self, cache=True):
+    def cognito_login(self):
         try:
-            if self.cognito_refresh_token:
-                auth = self.refresh_auth()
+            if self.cognito_tokens["refresh_token"]:
+                auth = self._refresh_auth()
             else:
                 auth = self._login()
 
             # Get the datetime that the token expires in
             expires_in = datetime.now(tz=self.tz) + timedelta(seconds=auth["ExpiresIn"])
 
-            # Writing this to the cache lets us get it later from the session
-            if self.cache_id and cache:
-                self.token_cache.__setitem__(
-                    self.cache_id,
-                    {
-                        "id_token": auth["IdToken"],
-                        "access_token": auth["AccessToken"],
-                        "token_expires": expires_in,
-                        "refresh_token": auth["IdToken"]
-                    }
-                )
+            self.cognito_tokens = {
+                "id_token": auth["IdToken"],
+                "access_token": auth["AccessToken"],
+                "token_expires": expires_in,
+                "refresh_token": auth["RefreshToken"]
+            }
 
-            self.cognito_id_token = auth["IdToken"]
-            self.cognito_access_token = auth["AccessToken"]
-            self.cognito_token_expires = expires_in
-            self.cognito_refresh_token = auth["RefreshToken"]
+            self.token_cache.cache_tokens(self.cognito_tokens)
             return auth["IdToken"]
+
         except (Exception, ClientError) as e:
-            logger.info(e)
             try:
-                self.cognito_refresh_token = None
+                logger.info(e)
+                self.cognito_tokens["refresh_token"] = None
                 return self.cognito_login()
             except (Exception, ClientError) as e:
                 logger.warning(e)
@@ -277,7 +242,7 @@ class CognitoIdentity(CredentialProvider):
             AuthFlow="USER_SRP_AUTH",
             AuthParameters=AUTH_PARAMETERS,
             ClientId=self.config["app_id"],
-            ClientMetadata=self.config.get("metadata", {}),
+            ClientMetadata=self.config.get("metadata"),
         )
 
         response = srp.process_challenge(auth["ChallengeParameters"])
@@ -300,27 +265,28 @@ class CognitoIdentity(CredentialProvider):
             AuthFlow="USER_PASSWORD_AUTH",
             AuthParameters=AUTH_PARAMETERS,
             ClientId=self.config["app_id"],
-            ClientMetadata=loads(self.config.get("metadata", "{}")),
+            ClientMetadata=self.config.get("metadata")
         )["AuthenticationResult"]
 
         self.auth = auth
         return auth
 
-    def refresh_auth(self):
-        AUTH_PARAMETERS = {"REFRESH_TOKEN": self.cognito_refresh_token}
+    def _refresh_auth(self):
+        AUTH_PARAMETERS = {"REFRESH_TOKEN": self.cognito_tokens["refresh_token"]}
         auth = self.IDP.initiate_auth(
             AuthFlow="REFRESH_TOKEN_AUTH",
             AuthParameters=AUTH_PARAMETERS,
             ClientId=self.config["app_id"],
-            ClientMetadata=loads(self.config.get("metadata", "{}")),
+            ClientMetadata=self.config.get("metadata"),
         )["AuthenticationResult"]
 
-        self.auth = auth
+        auth["RefreshToken"] = self.cognito_tokens["refresh_token"]
+
         return auth
 
     def _create_credentials_fetcher(self):
         def assume_role():
-            idToken = self.cognito_login()
+            idToken = self.cognito_tokens["id_token"] or self.cognito_login()
 
             identityId = self.IDENTITY.get_id(
                 IdentityPoolId=self.config["identity_pool_id"],
@@ -339,7 +305,7 @@ class CognitoIdentity(CredentialProvider):
             credentials = self.IDENTITY.get_credentials_for_identity(**opts)
 
             # We want to refresh whenever either the id token or iam is about to expire, whichever comes first
-            expire_time = self.cognito_token_expires if self.cognito_token_expires < credentials["Credentials"]["Expiration"] else credentials["Credentials"]["Expiration"]
+            expire_time = self.cognito_tokens["token_expires"] if self.cognito_tokens["token_expires"] < credentials["Credentials"]["Expiration"] else credentials["Credentials"]["Expiration"]
 
             return {
                 "access_key": credentials["Credentials"]["AccessKeyId"],

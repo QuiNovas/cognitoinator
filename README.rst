@@ -77,21 +77,11 @@ Note that cognito_profile and cognito_config are mutually exclusive. Trying to u
 The client, resource, and Session functions also accept an argument of auth_type. This can be "user_srp" (default) or "user_password".
 
 
-**Using the TokenFetcher**
-If you don't want to assume a role but would still like to access cognito id tokens directly, for instance to make Appsync calls using the requests library, you
-can use TokenFetcher. Instantiating the TokenFetcher will write the results from the Cognito login into boto3's JSONFileCache, where they can be accessed by properties
-on your object. Subsequently you can call TokenFetcher.fetch() to update those credentials. For long running processes you can start a daemon that will keep the
-credentials updated by passing "server=True".
-
-
 **Accessing Cognito tokens from a Session**
-If creating a Session directly the cognito id, refresh, and access tokens, as well as the expires time are available as properties on the Session object
-unless cache_credentials=False. Note that this uses boto3.credentialsJSONFileCache() which by default places the files in ~/.aws/boto/cache. If this will cause a proble
-eg: (your script is running as a user who has no home, or you need to ensure that other users cannot snoop on the cache) then you can pass a specific directory
-with cache_dir=/path/to/my/permission/and/acl/secured/directory. Passing cache_credentials=False and a value for cach_dir will result in ValueError. 
-
-
-Properties are listed below.
+If creating a Session directly the cognito id, refresh, and access tokens, as well as the expires time are available as properties on the Session object.
+Tokens are stored in memory by default, but passing a file name as "token_cache=/file/path.txt" into Session() will write cause the tokens to be written to the specified
+file as JSON. Passing a path to a file that does not exist will raise a FileNotFoundError. Passing a path to a file that is not writeable will raise OSError. Properties
+to access tokens:
 
 - Session().id_token
 - Session().access_token
@@ -132,6 +122,41 @@ object and then create your clients/resources off of that Session(). Example:
     m3Htft_Op
     2020-09-19T05:16:31
   """
+
+
+  **Getting Cognito credential tokens without a role**
+  If you don't want to assume a role but would still like to access cognito id tokens directly, for instance to make Appsync calls using the requests library, you
+  can use the TokenFetcher class. It provides the following properties:
+
+  - tokens (dict): A dictionary containing id_token, access_token, token_expires, and refresh_token
+  - id_token
+  - access_token
+  - refresh_token
+  - token_expires
+
+  Methods:
+  - fetch(): Updates and returns self.tokens
+
+  All properties are available upon instantiation. The constructor accepts the same kwargs as Session(), along with option "server (bool)". Setting "server=True" will start a background process to keep
+  tokens refreshed automatically, which means that your tokens will always be up to date.
+
+  **Example**
+
+  .. code-block:: python
+
+    from cognito_assume_role import TokenFetcher
+
+    cognito_credentials = TokenFetcher()
+    print(cognito_credentials)
+
+    print(cognito_credentials.id_token)
+    print(cognito_credentials.access_token)
+    print(cognito_credentials.token_expires)
+    print(cognito_credentials.refresh_token)
+
+
+
+
 
 **Creating a client that uses a config**
 
