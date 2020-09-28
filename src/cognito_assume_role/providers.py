@@ -109,6 +109,9 @@ class TokenCache:
 
 class TokenFetcher():
     def __init__(self, auth_type="user_srp", config={}, region_name=None, server=False, token_cache=None):
+        if token_cache is None:
+            io_obj = StringIO()
+            token_cache = TokenCache(io_obj)
         self.provider = CognitoIdentity(auth_type=auth_type, config=config, region_name=region_name, token_cache=token_cache)
         self.provider.cognito_login()
         if server:
@@ -207,7 +210,8 @@ class CognitoIdentity(CredentialProvider):
                 auth = self._login()
 
             # Get the datetime that the token expires in - 1 minute just to be safe
-            expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(minutes=auth["ExpiresIn"] - 1)
+            diff = auth["ExpiresIn"] - 1
+            expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(minutes=diff)
 
             self.cognito_tokens = {
                 "id_token": auth["IdToken"],
@@ -222,7 +226,7 @@ class CognitoIdentity(CredentialProvider):
         except (Exception, ClientError) as e:
             logger.info(e)
             del self.cognito_tokens["refresh_token"]
-            return self.cognito_login()
+            self.cognito_login()
 
     def _srp_auth(self):
         srp = AWSSRP(
@@ -286,20 +290,29 @@ class CognitoIdentity(CredentialProvider):
         return auth
 
     def _create_credentials_fetcher(self):
+        token_cache = self.token_cache
+
         def assume_role(time_as="string"):
             # Get a new idToken if this one has expired
-            if not self.cognito_tokens.get("id_token") or datetime.datetime.now(tzlocal()) > parse(self.cognito_tokens["token_expires"]):
+            if token_cache.tokens.get("id_token") is None or datetime.datetime.now(tzlocal()) > parse(token_cache.tokens["token_expires"]):
                 logger.info("Retreiving new Cognito tokens.")
-                self.cognito_login()
+                id_token = self.cognito_login()
+            else:
+                id_token = self.token_cache.tokens["id_token"]
 
-            identityId = self.IDENTITY.get_id(
-                IdentityPoolId=self.config["identity_pool_id"],
-                Logins={f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": self.cognito_tokens["id_token"]}
-            )["IdentityId"]
+            try:
+                identityId = self.IDENTITY.get_id(
+                    IdentityPoolId=self.config["identity_pool_id"],
+                    Logins={f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": id_token}
+                )["IdentityId"]
+
+            except self.IDENTITY.exceptions.NotAuthorizedException as e:
+                logger.info(e)
+                assume_role()
 
             opts = {
                 "IdentityId": identityId,
-                "Logins": {f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": self.cognito_tokens["id_token"]}
+                "Logins": {f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": id_token}
             }
 
             if self.config.get("role_arn"):
@@ -308,10 +321,10 @@ class CognitoIdentity(CredentialProvider):
             credentials = self.IDENTITY.get_credentials_for_identity(**opts)
 
             # We want to refresh whenever either the id token or iam is about to expire, whichever comes first
-            if not self.cognito_tokens.get("token_expires"):
+            if not token_cache.tokens.get("token_expires"):
                 expire_time = credentials["Credentials"]["Expiration"]
-            elif parse(self.cognito_tokens["token_expires"]) < credentials["Credentials"]["Expiration"]:
-                expire_time = parse(self.cognito_tokens["token_expires"])
+            elif parse(token_cache.tokens["token_expires"]) < credentials["Credentials"]["Expiration"]:
+                expire_time = parse(token_cache.tokens["token_expires"])
             else:
                 expire_time = credentials["Credentials"]["Expiration"]
 

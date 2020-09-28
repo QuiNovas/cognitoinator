@@ -1,8 +1,11 @@
 #!/usr/bin/env python3.8
 from cognito_assume_role import Session, TokenFetcher
 from time import sleep
+from pprint import pprint
 
-
+fetcher = TokenFetcher()
+print(fetcher.tokens)
+exit()
 session = Session()
 s3 = session.client("s3")
 
@@ -12,10 +15,11 @@ old_token = None
 new_token = None
 old_expires = None
 new_expires = None
-print(session.tokens)
 n = 1
 while True:
     s3.list_buckets()
+    pprint(session.tokens)
+    exit()
     new_expires = session.tokens["token_expires"]
     new_token = session.tokens["id_token"]
     if old_expires != new_expires and old_expires is not None:
