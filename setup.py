@@ -3,9 +3,9 @@ from setuptools import setup
 
 
 setup(
-    name="cognito-assume-role",
-    version="0.0.15",
-    description="Assumes an IAM role in boto3 using Cognito credentials",
+    name="cognitoinator",
+    version="0.0.1",
+    description="The swiss army knife of cognito authentication",
     author="Mathew Moon",
     author_email="mmoon@quinovas.com",
     url="https://github.com/QuiNovas/cognito-assume-role",
@@ -13,7 +13,7 @@ setup(
     long_description=io.open("README.rst", encoding="utf-8").read(),
     long_description_content_type="text/x-rst",
     packages=["cognito_assume_role"],
-    package_dir={"cognito_assume_role": "src/cognito_assume_role"},
+    package_dir={"cognitoinator": "src/cognitoinator"},
     install_requires=["boto3", "botocore", "warrant"],
     python_requires=">=3.8",
     classifiers=[

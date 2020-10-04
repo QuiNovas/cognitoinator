@@ -15,7 +15,6 @@ from botocore.exceptions import ClientError
 from botocore.credentials import CredentialProvider, RefreshableCredentials
 from warrant.aws_srp import AWSSRP
 
-
 set_stream_logger(name="botocore")
 logger = getLogger("botocore")
 logger.setLevel(INFO)
@@ -27,7 +26,6 @@ def get_cognito_config_from_env():
         "COGNITO_PASSWORD",
         "COGNITO_USERNAME",
         "COGNITO_USER_POOL_ID",
-        "COGNITO_IDENTITY_POOL_ID",
     ]
     missing = [x for x in envList if x not in environ]
     if missing and len(missing) != len(envList):
@@ -44,7 +42,9 @@ def get_cognito_config_from_env():
             "password": environ["COGNITO_PASSWORD"],
             "username": environ["COGNITO_USERNAME"],
             "user_pool_id": environ["COGNITO_USER_POOL_ID"],
-            "identity_pool_id": environ["COGNITO_IDENTITY_POOL_ID"],
+            "identity_pool_id": environ.get("COGNITO_IDENTITY_POOL_ID", " "),
+            "role_arn": environ.get("COGNITO_ROLE_ARN") or environ.get("AWS_ROLE_ARN"),
+            "auth_flow": environ.get("COGNITO_AUTH_FLOW", "enhanced"),
             "metadata": json.loads(environ.get("COGNITO_METADATA", "{}"))
         }
     else:
@@ -58,8 +58,7 @@ def get_cognito_config(config):
         "app_id",
         "password",
         "username",
-        "user_pool_id",
-        "identity_pool_id"
+        "user_pool_id"
     ]
     missing = [x for x in opt_list if x not in config]
     if missing and config:
@@ -158,6 +157,8 @@ class CognitoIdentity(CredentialProvider):
     cognito_tokens = {}
     auth = None
     tz = datetime.datetime.now(tzlocal())
+    STS = None
+    IDP = None
 
     def __init__(self, auth_type="user_srp", config={}, region_name=None, token_cache=None):
         super().__init__(self)
@@ -170,6 +171,10 @@ class CognitoIdentity(CredentialProvider):
             config=Config(signature_version=UNSIGNED)
         )
         self.IDENTITY = client("cognito-identity", region_name=self.config["region_name"])
+        if self.config["auth_flow"] == "classic":
+            self.STS = client("sts")
+            self.COGNITO_IDP = client("cognito-idp")
+
         self.cognito_tokens["refresh_token"] = None
         auth_type = auth_type or environ.get("COGNITO_AUTH_TYPE", "user_srp")
         if auth_type == "user_srp":
@@ -208,7 +213,6 @@ class CognitoIdentity(CredentialProvider):
                 auth = self._refresh_auth()
             else:
                 auth = self._login()
-
             # Get the datetime that the token expires in - 1 minute just to be safe
             diff = auth["ExpiresIn"] - 1
             expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(minutes=diff)
@@ -290,11 +294,10 @@ class CognitoIdentity(CredentialProvider):
         return auth
 
     def _create_credentials_fetcher(self):
-        token_cache = self.token_cache
 
-        def assume_role(time_as="string"):
+        def fetch(time_as="string"):
             # Get a new idToken if this one has expired
-            if token_cache.tokens.get("id_token") is None or datetime.datetime.now(tzlocal()) > parse(token_cache.tokens["token_expires"]):
+            if self.token_cache.tokens.get("id_token") is None or datetime.datetime.now(tzlocal()) > parse(self.token_cache.tokens["token_expires"]):
                 logger.info("Retreiving new Cognito tokens.")
                 id_token = self.cognito_login()
             else:
@@ -308,23 +311,48 @@ class CognitoIdentity(CredentialProvider):
 
             except self.IDENTITY.exceptions.NotAuthorizedException as e:
                 logger.info(e)
-                assume_role()
+                fetch()
 
-            opts = {
-                "IdentityId": identityId,
-                "Logins": {f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": id_token}
-            }
+            if self.config["auth_flow"] == "classic":
+                token = self.IDENTITY.get_open_id_token(
+                    IdentityId=identityId,
+                    Logins={
+                        f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": self.token_cache.tokens["id_token"]
+                    }
+                )["Token"]
 
-            if self.config.get("role_arn"):
-                opts["CustomRoleArn"] = self.config.get("role_arn")
+                if not self.config.get("role_session_name"):
+                    attributes = self.COGNITO_IDP.get_user(
+                        AccessToken=self.token_cache.tokens["access_token"]
+                    )["UserAttributes"]
 
-            credentials = self.IDENTITY.get_credentials_for_identity(**opts)
+                    self.config["role_session_name"] = [x["Value"] for x in attributes if x["Name"] == "sub"][0]
+
+                opts = {
+                    "WebIdentityToken": token,
+                    "DurationSeconds": int(self.config.get("role_expiry_time", "3600")),
+                    "RoleSessionName": self.config["role_session_name"],
+                    "RoleArn": self.config["role_arn"]
+                }
+
+                logger.info("ROLE: " + opts["RoleArn"])
+                credentials = self.STS.assume_role_with_web_identity(**opts)
+                credentials["Credentials"]["SecretKey"] = credentials["Credentials"]["SecretAccessKey"]
+            else:
+                opts = {
+                    "IdentityId": identityId,
+                    "Logins": {f"""cognito-idp.{self.config["region_name"]}.amazonaws.com/{self.config["user_pool_id"]}""": id_token}
+                }
+                if self.config.get("role_arn"):
+                    opts["CustomRoleArn"] = self.config.get("role_arn")
+
+                credentials = self.IDENTITY.get_credentials_for_identity(**opts)
 
             # We want to refresh whenever either the id token or iam is about to expire, whichever comes first
-            if not token_cache.tokens.get("token_expires"):
+            if not self.token_cache.tokens.get("token_expires"):
                 expire_time = credentials["Credentials"]["Expiration"]
-            elif parse(token_cache.tokens["token_expires"]) < credentials["Credentials"]["Expiration"]:
-                expire_time = parse(token_cache.tokens["token_expires"])
+            elif parse(self.token_cache.tokens["token_expires"]) < credentials["Credentials"]["Expiration"]:
+                expire_time = parse(self.token_cache.tokens["token_expires"])
             else:
                 expire_time = credentials["Credentials"]["Expiration"]
 
@@ -337,4 +365,4 @@ class CognitoIdentity(CredentialProvider):
                 "expiry_time": str(expire_time) if time_as == "string" else expire_time
             }
 
-        return assume_role
+        return fetch

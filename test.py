@@ -3,10 +3,8 @@ from cognito_assume_role import Session, TokenFetcher
 from time import sleep
 from pprint import pprint
 
-fetcher = TokenFetcher()
-print(fetcher.tokens)
-exit()
 session = Session()
+
 s3 = session.client("s3")
 
 s3.list_buckets()
