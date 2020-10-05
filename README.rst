@@ -94,7 +94,7 @@ object and then create your clients/resources off of that Session(). Example:
 
 .. code-block:: python
 
-  from cognito_assume_role import Session
+  from cognitoinator import Session
 
   session = Session()
   s3 = session.s3()
@@ -106,7 +106,7 @@ object and then create your clients/resources off of that Session(). Example:
 
 .. code-block:: python
 
-  from cognito_assume_role import TokenFetcher
+  from cognitoinator import TokenFetcher
 
   s = TokenFetcher()
   # Strings shortened for brevity
@@ -144,7 +144,7 @@ object and then create your clients/resources off of that Session(). Example:
 
   .. code-block:: python
 
-    from cognito_assume_role import TokenFetcher
+    from cognitoinator import TokenFetcher
 
     cognito_credentials = TokenFetcher()
     print(cognito_credentials)
@@ -162,7 +162,7 @@ object and then create your clients/resources off of that Session(). Example:
 
 .. code-block:: python
 
-  from cognito_assume_role import client
+  from cognitoinator import client
 
   client = boto3.client("s3", profile="my_profile")
   client.list_buckets()
@@ -172,7 +172,7 @@ object and then create your clients/resources off of that Session(). Example:
 
 .. code-block:: python
 
-  from cognito_assume_role import resource
+  from cognitoinator import resource
 
   resource = boto3.resource("s3", auth_type="user_password", region_name="us-east-2")
   resource.create_bucket(Bucket="my-file-dump-woot-woot")
@@ -182,7 +182,7 @@ object and then create your clients/resources off of that Session(). Example:
 
 .. code-block:: python
 
-  from cognito_assume_role import Session
+  from cognitoinator import Session
   session = Session(auth_type="user_srp", region_name="us-east-2")
   s3 = session.client("s3")
   dynamo = resource("dynamodb")

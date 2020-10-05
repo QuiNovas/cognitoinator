@@ -45,7 +45,8 @@ def get_cognito_config_from_env():
             "identity_pool_id": environ.get("COGNITO_IDENTITY_POOL_ID", " "),
             "role_arn": environ.get("COGNITO_ROLE_ARN") or environ.get("AWS_ROLE_ARN"),
             "auth_flow": environ.get("COGNITO_AUTH_FLOW", "enhanced"),
-            "metadata": json.loads(environ.get("COGNITO_METADATA", "{}"))
+            "metadata": json.loads(environ.get("COGNITO_METADATA", "{}")),
+            "role_expiry_time": int(environ.get("COGNITO_ROLE_EXPIRY_TIME", "900"))
         }
     else:
         res = {}
@@ -208,6 +209,7 @@ class CognitoIdentity(CredentialProvider):
         return self.cognito_tokens
 
     def cognito_login(self):
+        logger.info("Fetching Cognito credentials")
         try:
             if self.cognito_tokens.get("refresh_token"):
                 auth = self._refresh_auth()
@@ -215,7 +217,7 @@ class CognitoIdentity(CredentialProvider):
                 auth = self._login()
             # Get the datetime that the token expires in - 1 minute just to be safe
             diff = auth["ExpiresIn"] - 1
-            expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(minutes=diff)
+            expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(seconds=diff)
 
             self.cognito_tokens = {
                 "id_token": auth["IdToken"],
@@ -262,7 +264,6 @@ class CognitoIdentity(CredentialProvider):
             ChallengeResponses=response,
         )["AuthenticationResult"]
 
-        self.auth = auth
         return auth
 
     def _password_auth(self):
@@ -296,9 +297,10 @@ class CognitoIdentity(CredentialProvider):
     def _create_credentials_fetcher(self):
 
         def fetch(time_as="string"):
+            logger.info("Fetching credentials....")
             # Get a new idToken if this one has expired
             if self.token_cache.tokens.get("id_token") is None or datetime.datetime.now(tzlocal()) > parse(self.token_cache.tokens["token_expires"]):
-                logger.info("Retreiving new Cognito tokens.")
+                logger.debug("Retreiving new Cognito tokens.")
                 id_token = self.cognito_login()
             else:
                 id_token = self.token_cache.tokens["id_token"]
@@ -311,9 +313,11 @@ class CognitoIdentity(CredentialProvider):
 
             except self.IDENTITY.exceptions.NotAuthorizedException as e:
                 logger.info(e)
+                self.token_cache.tokens["id_token"]
                 fetch()
 
             if self.config["auth_flow"] == "classic":
+                logger.info("Using classic auth flow....")
                 token = self.IDENTITY.get_open_id_token(
                     IdentityId=identityId,
                     Logins={
@@ -330,12 +334,11 @@ class CognitoIdentity(CredentialProvider):
 
                 opts = {
                     "WebIdentityToken": token,
-                    "DurationSeconds": int(self.config.get("role_expiry_time", "3600")),
+                    "DurationSeconds": int(self.config.get("role_expiry_time", "900")),
                     "RoleSessionName": self.config["role_session_name"],
                     "RoleArn": self.config["role_arn"]
                 }
 
-                logger.info("ROLE: " + opts["RoleArn"])
                 credentials = self.STS.assume_role_with_web_identity(**opts)
                 credentials["Credentials"]["SecretKey"] = credentials["Credentials"]["SecretAccessKey"]
             else:
