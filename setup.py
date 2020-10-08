@@ -4,11 +4,11 @@ from setuptools import setup
 
 setup(
     name="cognitoinator",
-    version="0.0.17",
+    version="0.0.18",
     description="The swiss army knife of cognito authentication",
     author="Mathew Moon",
     author_email="mmoon@quinovas.com",
-    url="https://github.com/QuiNovas/cognito-assume-role",
+    url="https://github.com/QuiNovas/cognitoinator",
     license="Apache 2.0",
     long_description=io.open("README.rst", encoding="utf-8").read(),
     long_description_content_type="text/x-rst",
