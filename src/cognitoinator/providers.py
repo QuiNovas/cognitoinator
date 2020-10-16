@@ -108,12 +108,22 @@ class TokenCache:
 
 
 class TokenFetcher():
-    def __init__(self, auth_type="user_srp", config={}, region_name=None, server=False, token_cache=None):
+    def __init__(self, auth_type="user_srp", config={}, region_name=None, server=False, token_cache=None, non_blocking=False):
         if token_cache is None:
             io_obj = StringIO()
             token_cache = TokenCache(io_obj)
+        else:
+            token_cache = TokenCache(token_cache)
+
         self.provider = CognitoIdentity(auth_type=auth_type, config=config, region_name=region_name, token_cache=token_cache)
-        self.provider.cognito_login()
+
+        self.provider.cognito_tokens = token_cache.tokens
+
+        if non_blocking:
+            Thread(target=self.provider.cognito_login, daemon=True)
+        else:
+            self.provider.cognito_login()
+
         if server:
             self.start_server()
 
@@ -313,7 +323,7 @@ class CognitoIdentity(CredentialProvider):
 
             except self.IDENTITY.exceptions.NotAuthorizedException as e:
                 logger.info(e)
-                self.token_cache.tokens["id_token"]
+                self.token_cache.tokens["id_token"] = None
                 fetch()
 
             if self.config["auth_flow"] == "classic":
