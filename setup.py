@@ -4,7 +4,7 @@ from setuptools import setup
 
 setup(
     name="cognitoinator",
-    version="0.0.19",
+    version="0.0.20",
     description="The swiss army knife of cognito authentication",
     author="Mathew Moon",
     author_email="mmoon@quinovas.com",

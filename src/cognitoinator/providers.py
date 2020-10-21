@@ -28,14 +28,14 @@ def get_cognito_config_from_env():
         "COGNITO_USER_POOL_ID",
     ]
     missing = [x for x in envList if x not in environ]
-    if missing and len(missing) != len(envList):
-        raise Exception(
-            f"""
-            It looks like you want to use Cognito credentials for role switching,
-            but you are missing some environment variables. Missing:
-            {', '.join(missing)}
-        """
-        )
+    for e in envList:
+        if e not in environ:
+            raise Exception(
+                f"""
+                It looks like you want to use Cognito credentials for role switching,
+                but you are missing some environment variables. Missing:
+                {e}
+            """)
     if not missing:
         res = {
             "app_id": environ["COGNITO_APP_ID"],
@@ -50,7 +50,6 @@ def get_cognito_config_from_env():
         }
     else:
         res = {}
-
     return res
 
 
@@ -174,7 +173,10 @@ class CognitoIdentity(CredentialProvider):
     def __init__(self, auth_type="user_srp", config={}, region_name=None, token_cache=None):
         super().__init__(self)
         self.token_cache = token_cache
-        self.config = get_cognito_config(config) or get_cognito_config_from_env() or {}
+        if config:
+            self.config = get_cognito_config(config)
+        else:
+            self.config = get_cognito_config_from_env()
         self.config["region_name"] = region_name or config.get("region") or environ.get("AWS_DEFAULT_REGION")
         self.IDP = client(
             "cognito-idp",
