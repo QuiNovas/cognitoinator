@@ -221,7 +221,7 @@ class CognitoIdentity(CredentialProvider):
         return self.cognito_tokens
 
     def cognito_login(self):
-        logger.info("Fetching Cognito credentials")
+        logger.debug("Fetching Cognito credentials")
         try:
             if self.cognito_tokens.get("refresh_token"):
                 auth = self._refresh_auth()
@@ -242,8 +242,9 @@ class CognitoIdentity(CredentialProvider):
             return auth["IdToken"]
 
         except (Exception, ClientError) as e:
-            logger.info(e)
-            del self.cognito_tokens["refresh_token"]
+            logger.error(e)
+            if self.cognito_tokens.get("refresh_token"):
+                del self.cognito_tokens["refresh_token"]
             self.cognito_login()
 
     def _srp_auth(self):
@@ -309,7 +310,8 @@ class CognitoIdentity(CredentialProvider):
     def _create_credentials_fetcher(self):
 
         def fetch(time_as="string"):
-            logger.info("Fetching credentials....")
+            logger.debug("Checking credentials....")
+
             # Get a new idToken if this one has expired
             if self.token_cache.tokens.get("id_token") is None or datetime.datetime.now(tzlocal()) > parse(self.token_cache.tokens["token_expires"]):
                 logger.debug("Retreiving new Cognito tokens.")
@@ -329,7 +331,7 @@ class CognitoIdentity(CredentialProvider):
                 fetch()
 
             if self.config["auth_flow"] == "classic":
-                logger.info("Using classic auth flow....")
+                logger.debug("Using classic auth flow....")
                 token = self.IDENTITY.get_open_id_token(
                     IdentityId=identityId,
                     Logins={
