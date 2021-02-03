@@ -61,6 +61,8 @@ def get_cognito_config(config):
         "user_pool_id"
     ]
     missing = [x for x in opt_list if x not in config]
+    config["auth_flow"] = config.get("auth_flow") or "enhanced"
+    config["metadata"] = config.get("metadata", {})
     if missing and config:
         raise Exception(
             f"""

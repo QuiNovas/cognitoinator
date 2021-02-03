@@ -37,7 +37,7 @@ def Session(**kwargs):
         config = {}
 
     auth_type = kwargs.get("auth_type") or config.get("auth_type") or "user_srp"
-    if auth_type not in ("user_passwword", "user_srp"): raise ValueError("auth_type must be one of user_password or user_srp")
+    if auth_type not in ("user_password", "user_srp"): raise ValueError("auth_type must be one of user_password or user_srp")
 
     # If token_cache file is provided we will use it, otherwise we will use a StringIO object
     if token_cache := kwargs.get("token_cache"):
