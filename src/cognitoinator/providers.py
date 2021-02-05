@@ -179,7 +179,7 @@ class CognitoIdentity(CredentialProvider):
             self.config = get_cognito_config(config)
         else:
             self.config = get_cognito_config_from_env()
-        self.config["region_name"] = region_name or config.get("region") or environ.get("AWS_DEFAULT_REGION")
+        self.config["region_name"] = region_name or environ.get("AWS_DEFAULT_REGION") or config.get("region")
         self.IDP = client(
             "cognito-idp",
             region_name=self.config["region_name"],
