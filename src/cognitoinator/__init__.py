@@ -3,7 +3,7 @@ from pathlib import Path
 from io import StringIO
 from boto3.session import Session as botosession
 from botocore.configloader import load_config
-from botocore.session import get_session
+from botocore.session import Session as coresession
 from .providers import CognitoIdentity, TokenFetcher, TokenCache
 
 COGNITO_DEFAULT_SESSION = None
@@ -48,16 +48,23 @@ def Session(**kwargs):
         cache_io = StringIO()
         token_cache = TokenCache(cache_io)
 
+    opts = {
+        "config": config,
+        "token_cache": token_cache
+    }
+
     # Create our credential provider
     auth_client = CognitoIdentity(
         auth_type,
-        config=config,
-        token_cache=token_cache
+        **opts
     )
 
-    bc_session = get_session()
+    bc_session = coresession()
 
     # Clean our own kwargs out so that we can pass the remainder to boto.
+    if "region_name" in kwargs and "region" in kwargs.get("config", {}):
+        del kwargs["config"]["region"]
+
     session_args = {k: kwargs[k] for k in kwargs if k not in args_to_remove}
     session_args["botocore_session"] = bc_session
 
@@ -76,6 +83,7 @@ def Session(**kwargs):
 
     # If we don't pre-load then we won't have access to the tokens until after either client() or resource() is called
     auth_client.load()
+
     return session
 
 

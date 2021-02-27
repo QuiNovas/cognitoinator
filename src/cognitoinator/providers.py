@@ -179,7 +179,7 @@ class CognitoIdentity(CredentialProvider):
             self.config = get_cognito_config(config)
         else:
             self.config = get_cognito_config_from_env()
-        self.config["region_name"] = region_name or environ.get("AWS_DEFAULT_REGION") or config.get("region")
+        self.config["region_name"] = config.get("region") or environ.get("AWS_DEFAULT_REGION")
         self.IDP = client(
             "cognito-idp",
             region_name=self.config["region_name"],
@@ -188,7 +188,7 @@ class CognitoIdentity(CredentialProvider):
         self.IDENTITY = client("cognito-identity", region_name=self.config["region_name"])
         if self.config["auth_flow"] == "classic":
             self.STS = client("sts")
-            self.COGNITO_IDP = client("cognito-idp")
+            self.COGNITO_IDP = client("cognito-idp", region_name=self.config["region_name"])
 
         self.cognito_tokens["refresh_token"] = None
         auth_type = auth_type or environ.get("COGNITO_AUTH_TYPE", "user_srp")
