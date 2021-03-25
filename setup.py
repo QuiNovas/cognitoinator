@@ -5,8 +5,8 @@ from setuptools import setup
 
 setup(
     name="cognitoinator",
-    version="0.0.24",
-    description="The swiss army knife of cognito authentication",
+    version="0.1.0",
+    description="Log into Cognito, assume an IAM role, directly access JWT's from your Cognito session, and use boto3 all with Cognito credentials",
     author="Mathew Moon",
     author_email="mmoon@quinovas.com",
     url="https://github.com/QuiNovas/cognitoinator",
@@ -18,7 +18,7 @@ setup(
     install_requires=["boto3", "botocore", "warrant"],
     python_requires=">=3.8",
     classifiers=[
-        "Development Status :: 3 - Alpha",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
         "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3.8",

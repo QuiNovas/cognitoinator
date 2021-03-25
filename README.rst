@@ -1,6 +1,5 @@
-============================
-cognitoinator
-============================
+Log into Cognito, assume IAM roles, access Cognito JWT's, and use boto3 with Cognito credentials is now simple
+**************************************************************************************************************
 
 IMPORTANT!
 ----------
