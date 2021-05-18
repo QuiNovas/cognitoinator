@@ -16,6 +16,8 @@ setup(
     packages=["cognitoinator"],
     package_dir={"cognitoinator": "src/cognitoinator"},
     install_requires=["boto3", "botocore", "warrant"],
+    scripts=["src/cognitoinator/scripts/cognito-profile-credential-fetcher"],
+    include_package_data=True,
     python_requires=">=3.8",
     classifiers=[
         "Development Status :: 4 - Beta",
