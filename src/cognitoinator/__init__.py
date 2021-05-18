@@ -9,14 +9,14 @@ from .providers import CognitoIdentity, TokenFetcher, TokenCache
 COGNITO_DEFAULT_SESSION = None
 
 
-def _get_default_session(**kwargs):
+def _get_default_session(**kwargs) -> botosession:
     global COGNITO_DEFAULT_SESSION
     if COGNITO_DEFAULT_SESSION is None:
         COGNITO_DEFAULT_SESSION = Session(**kwargs)
     return COGNITO_DEFAULT_SESSION
 
 
-def Session(**kwargs):
+def Session(**kwargs) -> botosession:
 
     args_to_remove = [
         "cognito_profile",
@@ -41,8 +41,6 @@ def Session(**kwargs):
 
     # If token_cache file is provided we will use it, otherwise we will use a StringIO object
     if token_cache := kwargs.get("token_cache"):
-        if not path.isfile(token_cache): raise FileNotFoundError(f"File {token_cache} specified as a token cache does not exist.")
-        if not access(token_cache, W_OK): raise OSError(f"File {token_cache} is not writable.")
         token_cache = TokenCache(token_cache)
     else:
         cache_io = StringIO()
@@ -55,7 +53,7 @@ def Session(**kwargs):
 
     # Create our credential provider
     auth_client = CognitoIdentity(
-        auth_type,
+        auth_type=auth_type,
         **opts
     )
 
@@ -83,11 +81,11 @@ def Session(**kwargs):
 
     # If we don't pre-load then we won't have access to the tokens until after either client() or resource() is called
     auth_client.load()
-
+    setattr(session, "auth_client", auth_client)
     return session
 
 
-def get_profile(name, credentials_file):
+def get_profile(name, credentials_file) -> dict:
     credentials_file = credentials_file or environ.get("COGNITO_CREDENTIALS_FILE") or f"{Path.home()}/.aws/cognito_credentials"
     if not path.isfile(credentials_file): raise Exception("Cannot find cognito_credentials_file")
     profiles = parse_config(credentials_file).get("profiles", {})
@@ -96,7 +94,7 @@ def get_profile(name, credentials_file):
     return profiles[name]
 
 
-def client(*args, **kwargs):
+def client(*args, **kwargs) -> botosession:
     session_opts = {
         "auth_type": kwargs.get("auth_type"),
         "cognito_profile": kwargs.get("cognito_profile"),
@@ -106,7 +104,7 @@ def client(*args, **kwargs):
     return _get_default_session(**session_opts).client(*args, **client_opts)
 
 
-def resource(*args, **kwargs):
+def resource(*args, **kwargs) -> botosession:
     session_opts = {
         "auth_type": kwargs.get("auth_type"),
         "cognito_profile": kwargs.get("cognito_profile"),
@@ -117,33 +115,33 @@ def resource(*args, **kwargs):
 
 
 # Patch boto3.session.Session so we can get our Cognito tokens from our session later
-def parse_config(filename):
+def parse_config(filename) -> dict:
     config = load_config(filename)
     return config
 
 
 @property
-def id_token(self):
+def id_token(self) -> str:
     return self.token_cache.tokens.get("id_token")
 
 
 @property
-def access_token(self):
+def access_token(self) -> str:
     return self.token_cache.tokens.get("access_token")
 
 
 @property
-def refresh_token(self):
+def refresh_token(self) -> str:
     return self.token_cache.tokens.get("refresh_token")
 
 
 @property
-def token_expires(self):
+def token_expires(self) -> str:
     return self.token_cache.tokens.get("token_expires")
 
 
 @property
-def cognito_tokens(self):
+def cognito_tokens(self) -> dict:
     return self.token_cache.tokens
 
 
