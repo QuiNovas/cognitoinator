@@ -1,26 +1,55 @@
 #!/usr/bin/env python3.8
+from copy import deepcopy
 from threading import Thread
 from time import sleep
-from io import StringIO
+from io import (
+    StringIO,
+    TextIOBase
+)
+from typing import (
+    Callable,
+    Union,
+    Optional
+)
 from os import environ
 import datetime
 import json
-from logging import getLogger, INFO
+from logging import getLogger
 from dateutil.tz import tzlocal
 from dateutil.parser import parse
 from boto3 import client, set_stream_logger
 from botocore import UNSIGNED
 from botocore.config import Config
-from botocore.exceptions import ClientError
-from botocore.credentials import CredentialProvider, RefreshableCredentials
+from botocore.credentials import (
+    CredentialProvider,
+    RefreshableCredentials
+)
 from warrant.aws_srp import AWSSRP
 
 set_stream_logger(name="botocore")
 logger = getLogger("botocore")
-logger.setLevel(INFO)
+logger.setLevel("INFO")
 
 
-def get_cognito_config_from_env():
+def raise_for_invalid_auth_flow(flow: str):
+    allowed_flows = [
+        "classic",
+        "enhanced"
+    ]
+    if flow not in allowed_flows:
+        raise ValueError(f"Auto flow must be one of {','.join(allowed_flows)}")
+
+
+def raise_for_invalid_auth_type(auth_type: str):
+    allowed_types = [
+        "user_srp",
+        "user_password"
+    ]
+    if auth_type not in allowed_types:
+        raise ValueError(f"Auth type must be one of {','.join(allowed_types)}")
+
+
+def get_cognito_config_from_env() -> dict:
     envList = [
         "COGNITO_APP_ID",
         "COGNITO_PASSWORD",
@@ -44,6 +73,7 @@ def get_cognito_config_from_env():
             "user_pool_id": environ["COGNITO_USER_POOL_ID"],
             "identity_pool_id": environ.get("COGNITO_IDENTITY_POOL_ID", " "),
             "role_arn": environ.get("COGNITO_ROLE_ARN") or environ.get("AWS_ROLE_ARN"),
+            "role_session_name": environ.get("COGNITO_ROLE_SESSION_NAME"),
             "auth_flow": environ.get("COGNITO_AUTH_FLOW", "enhanced"),
             "metadata": json.loads(environ.get("COGNITO_METADATA", "{}")),
             "role_expiry_time": int(environ.get("COGNITO_ROLE_EXPIRY_TIME", "900"))
@@ -53,7 +83,7 @@ def get_cognito_config_from_env():
     return res
 
 
-def get_cognito_config(config):
+def get_cognito_config(config: dict) -> dict:
     opt_list = [
         "app_id",
         "password",
@@ -75,50 +105,115 @@ def get_cognito_config(config):
 
 
 class TokenCache:
-    def __init__(self, cache):
+    def __init__(self, cache: Union[TextIOBase, str]):
         self.cache = cache
+        if (
+            isinstance(self.cache, TextIOBase)
+            and hasattr(self.cache, "seek")
+            and hasattr(self.cache, "truncate")
+        ):
+            self.json_writer = self.__io_writer
+            self.json_loader = self.__io_loader
+        elif isinstance(self.cache, str):
+            self.raise_for_file_error()
+            self.json_writer = self.__file_writer
+            self.json_loader = self.__file_loader
+        else:
+            raise TypeError("TokenCache expects first argument to be either a filename as a string or a seekable, truncatable file-like object")
 
-    def cache_tokens(self, tokens):
+        self.cache_tokens({})
+
+    def raise_for_file_error(self):
+        try:
+            with open(self.cache, "r") as _:
+                pass
+        except Exception as e:
+            raise Exception("TokenCache: Invalid cache file") from e
+
+    def cache_tokens(self, tokens: dict):
         if isinstance(tokens.get("token_expires"), datetime.datetime):
             tokens["token_expires"] = str(tokens["token_expires"])
 
-        if isinstance(self.cache, StringIO):
-            self.cache.write(json.dumps(tokens))
-            self.cache.seek(0)
+        self.json_writer(tokens)
 
-        if isinstance(self.cache, str):
-            with open(self.cache, "w") as f:
-                json.dump(tokens, f)
+    def __io_writer(self, data: dict):
+        self.cache.seek(0)
+        self.cache.truncate()
+        self.cache.write(json.dumps(data))
+        self.cache.seek(0)
+
+    def __io_loader(self) -> dict:
+        self.cache.seek(0)
+        # We use read() instead of get_value() even if we are using StringIO because
+        # all TextIO objects have read()
+        res = self.cache.read()
+        # Clean up for the next guy
+        self.cache.seek(0)
+        return json.loads(res)
+
+    def __file_writer(self, data: dict):
+        with open(self.cache, "w") as f:
+            json.dump(data, f)
+
+    def __file_loader(self) -> dict:
+        with open(self.cache, "r") as f:
+            return json.load(f)
 
     @property
-    def tokens(self):
+    def tokens(self) -> dict:
         try:
-            if isinstance(self.cache, StringIO):
-                self.cache.seek(0)
-                tokens = json.loads(self.cache.getvalue())
-            else:
-                with open(self.cache, "r") as f:
-                    tokens = json.load(f)
+            tokens = self.json_loader()
         except json.decoder.JSONDecodeError as e:
             if e.msg == "Expecting value":
                 tokens = {}
             else:
-                raise e
+                raise Exception("TokenCache: Could not decode cache values") from e
 
         return tokens
 
+    def delete_token(self, token: str):
+        cur_tokens = self.tokens
+        try:
+            del cur_tokens[token]
+        except KeyError as e:
+            raise KeyError(f"TokenCache.delete_token: {e}") from e
+
+        self.cache_tokens(cur_tokens)
+
+    def set_token(self, key, val):
+        self.cache_tokens({
+            **self.tokens,
+            key: val
+        })
+
 
 class TokenFetcher():
-    def __init__(self, auth_type="user_srp", config={}, region_name=None, server=False, token_cache=None, non_blocking=False):
+    def __init__(
+        self,
+        *,
+        auth_type: str = "user_srp",
+        config: dict = {},
+        region_name: Optional[str],
+        server: bool = False,
+        token_cache: Optional[Union[TextIOBase, str]],
+        non_blocking: bool = False
+    ):
+        raise_for_invalid_auth_type(auth_type)
+
         if token_cache is None:
             io_obj = StringIO()
             token_cache = TokenCache(io_obj)
         else:
             token_cache = TokenCache(token_cache)
 
-        self.provider = CognitoIdentity(auth_type=auth_type, config=config, region_name=region_name, token_cache=token_cache)
+        self.provider = CognitoIdentity(
+            auth_type=auth_type,
+            config=config,
+            region_name=region_name,
+            token_cache=token_cache
+        )
 
-        self.provider.cognito_tokens = token_cache.tokens
+        self.provider.token_cache = token_cache
 
         if non_blocking:
             Thread(target=self.provider.cognito_login, daemon=True)
@@ -128,33 +223,33 @@ class TokenFetcher():
         if server:
             self.start_server()
 
-    def fetch(self):
+    def fetch(self) -> dict:
         self.provider.cognito_login()
         return self.provider.token_cache.tokens
 
     @property
-    def tokens(self):
+    def tokens(self) -> dict:
         return self.provider.token_cache.tokens
 
     @property
-    def id_token(self):
-        return self.provider.cognito_tokens["id_token"]
+    def id_token(self) -> str:
+        return self.provider.token_cache.tokens["id_token"]
 
     @property
-    def access_token(self):
-        return self.provider.cognito_tokens["access_token"]
+    def access_token(self) -> str:
+        return self.provider.token_cache.tokens["access_token"]
 
     @property
-    def refresh_token(self):
-        return self.provider.cognito_tokens["refresh_token"]
+    def refresh_token(self) -> str:
+        return self.provider.token_cache.tokens["refresh_token"]
 
     @property
-    def expires(self):
-        return self.provider.cognito_tokens["token_expires"]
+    def expires(self) -> str:
+        return self.provider.token_cache.tokens["token_expires"]
 
     def login_loop(self):
         while True:
-            while datetime.datetime.now(tzlocal()) > parse(self.provider.cognito_tokens["token_expires"]) - datetime.timedelta(seconds=30):
+            while datetime.datetime.now(tzlocal()) > parse(self.provider.token_cache.tokens["token_expires"]) - datetime.timedelta(seconds=30):
                 sleep(5)
             self.provider.cognito_login()
 
@@ -166,43 +261,56 @@ class CognitoIdentity(CredentialProvider):
     METHOD = 'cognito-identity'
     CANONICAL_NAME = 'customCognitoIdentity'
     api_credential_expiration = None
-    cognito_tokens = {}
     auth = None
     tz = datetime.datetime.now(tzlocal())
     STS = None
     IDP = None
 
-    def __init__(self, auth_type="user_srp", config={}, region_name=None, token_cache=None):
+    def __init__(
+        self,
+        *,
+        auth_type: str = "user_srp",
+        config: dict = {},
+        token_cache: TokenCache,
+        region_name: str = None
+    ):
         super().__init__(self)
+
+        raise_for_invalid_auth_type(auth_type)
+        self.profile_credentials = None
         self.token_cache = token_cache
+
         if config:
             self.config = get_cognito_config(config)
         else:
             self.config = get_cognito_config_from_env()
-        self.config["region_name"] = config.get("region") or environ.get("AWS_DEFAULT_REGION")
+
+        self.config["region_name"] = region_name or config.get("region") or environ.get("AWS_DEFAULT_REGION")
+
         self.IDP = client(
             "cognito-idp",
             region_name=self.config["region_name"],
             config=Config(signature_version=UNSIGNED)
         )
+
         self.IDENTITY = client("cognito-identity", region_name=self.config["region_name"])
+
         if self.config["auth_flow"] == "classic":
             self.STS = client("sts")
             self.COGNITO_IDP = client("cognito-idp", region_name=self.config["region_name"])
 
-        self.cognito_tokens["refresh_token"] = None
+        self.token_cache.set_token("refresh_token", None)
+
         auth_type = auth_type or environ.get("COGNITO_AUTH_TYPE", "user_srp")
         if auth_type == "user_srp":
             self._auth_func = self._srp_auth
         elif auth_type == "user_password":
             self._auth_func = self._password_auth
-        else:
-            raise Exception("kwarg auth_type must be one of user_srp or user_password")
 
-    def load(self):
+    def load(self) -> Union[RefreshableCredentials, None]:
         if self.config:
             fetcher = self._create_credentials_fetcher()
-            credentials = fetcher(time_as="datetime")
+            credentials = fetcher(time_as_string=False)
             res = RefreshableCredentials(
                 credentials["access_key"],
                 credentials["secret_key"],
@@ -215,41 +323,35 @@ class CognitoIdentity(CredentialProvider):
             res = None
         return res
 
-    def _login(self):
+    def _login(self) -> dict:
         return self._auth_func()
 
-    def refresh_auth(self):
+    def refresh_auth(self) -> dict:
         self.cognito_login()
-        return self.cognito_tokens
+        return self.token_cache.tokens
 
-    def cognito_login(self):
-        logger.debug("Fetching Cognito credentials")
-        try:
-            if self.cognito_tokens.get("refresh_token"):
-                auth = self._refresh_auth()
-            else:
-                auth = self._login()
-            # Get the datetime that the token expires in - 1 minute just to be safe
-            diff = auth["ExpiresIn"] - 1
-            expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(seconds=diff)
+    def cognito_login(self) -> str:
+        if (
+            self.token_cache.tokens.get("refresh_token") is None  # If we have a refresh token use it
+            or self._refresh_auth() is None  # Refresh token must be bad
+        ):
+            logger.info("cognito_login: Running fresh login")
+            auth = self._login()
 
-            self.cognito_tokens = {
-                "id_token": auth["IdToken"],
-                "access_token": auth["AccessToken"],
-                "token_expires": str(expires_in),
-                "refresh_token": auth["RefreshToken"]
-            }
+        # Get the datetime that the token expires in - 1 minute just to be safe
+        diff = auth["ExpiresIn"] - 1
+        expires_in = datetime.datetime.now(tzlocal()) + datetime.timedelta(seconds=diff)
 
-            self.token_cache.cache_tokens(self.cognito_tokens)
-            return auth["IdToken"]
+        self.token_cache.cache_tokens({
+            "id_token": auth["IdToken"],
+            "access_token": auth["AccessToken"],
+            "token_expires": str(expires_in),
+            "refresh_token": auth["RefreshToken"]
+        })
 
-        except (Exception, ClientError) as e:
-            logger.error(e)
-            if self.cognito_tokens.get("refresh_token"):
-                del self.cognito_tokens["refresh_token"]
-            self.cognito_login()
+        return auth["IdToken"]
 
-    def _srp_auth(self):
+    def _srp_auth(self) -> dict:
         srp = AWSSRP(
             username=self.config["username"],
             password=self.config["password"],
@@ -281,7 +383,7 @@ class CognitoIdentity(CredentialProvider):
 
         return auth
 
-    def _password_auth(self):
+    def _password_auth(self) -> dict:
         AUTH_PARAMETERS = {
             "USERNAME": self.config["username"],
             "PASSWORD": self.config["password"]
@@ -296,22 +398,28 @@ class CognitoIdentity(CredentialProvider):
         self.auth = auth
         return auth
 
-    def _refresh_auth(self):
+    def _refresh_auth(self) -> dict:
+        logger.info("Refreshing auth")
         AUTH_PARAMETERS = {"REFRESH_TOKEN": self.token_cache.tokens["refresh_token"]}
-        auth = self.IDP.initiate_auth(
-            AuthFlow="REFRESH_TOKEN_AUTH",
-            AuthParameters=AUTH_PARAMETERS,
-            ClientId=self.config["app_id"],
-            ClientMetadata=self.config.get("metadata"),
-        )["AuthenticationResult"]
+        try:
+            auth = self.IDP.initiate_auth(
+                AuthFlow="REFRESH_TOKEN_AUTH",
+                AuthParameters=AUTH_PARAMETERS,
+                ClientId=self.config["app_id"],
+                ClientMetadata=self.config.get("metadata"),
+            )["AuthenticationResult"]
 
-        auth["RefreshToken"] = self.cognito_tokens["refresh_token"]
+            auth["RefreshToken"] = self.token_cache.tokens["refresh_token"]
+            return auth
+        except self.IDP.exceptions.NotAuthorizedException as e:
+            if e.response["Error"]["Message"] == "Refresh Token has expired":
+                logger.info("refresh_auth: Refresh token has expired. Need a fresh login")
+            else:
+                raise e from e
 
-        return auth
+    def _create_credentials_fetcher(self) -> Callable:
 
-    def _create_credentials_fetcher(self):
-
-        def fetch(time_as="string"):
+        def fetch(time_as_string: bool = True) -> dict:
             logger.debug("Checking credentials....")
 
             # Get a new idToken if this one has expired
@@ -328,7 +436,7 @@ class CognitoIdentity(CredentialProvider):
                 )["IdentityId"]
 
             except self.IDENTITY.exceptions.NotAuthorizedException as e:
-                logger.info(e)
+                logger.info(f"LOGIN ERROR: {e}")
                 self.token_cache.tokens["id_token"] = None
                 fetch()
 
@@ -341,12 +449,16 @@ class CognitoIdentity(CredentialProvider):
                     }
                 )["Token"]
 
-                if not self.config.get("role_session_name"):
+                if self.config.get("role_session_name") is None:
                     attributes = self.COGNITO_IDP.get_user(
                         AccessToken=self.token_cache.tokens["access_token"]
                     )["UserAttributes"]
+                    sub = [
+                        x["Value"] for x in attributes
+                        if x["Name"] == "sub"
+                    ][0]
 
-                    self.config["role_session_name"] = [x["Value"] for x in attributes if x["Name"] == "sub"][0]
+                    self.config["role_session_name"] = sub
 
                 opts = {
                     "WebIdentityToken": token,
@@ -377,11 +489,21 @@ class CognitoIdentity(CredentialProvider):
 
             # When we call load() expiry_time has to be a datetime, when we are called by RefreshableCredentials expiry_time needs
             # to be a string. I think its ugly myself. Open to suggestions.
-            return {
+            creds = {
                 "access_key": credentials["Credentials"]["AccessKeyId"],
                 "secret_key": credentials["Credentials"]["SecretKey"],
                 "token": credentials["Credentials"]["SessionToken"],
-                "expiry_time": str(expire_time) if time_as == "string" else expire_time
+                "expiry_time": str(expire_time) if time_as_string else expire_time
             }
+
+            self.profile_credentials = {
+                "Version": 1,
+                "AccessKeyId": creds["access_key"],
+                "SecretAccessKey": creds["secret_key"],
+                "SessionToken": creds["token"],
+                "Expiration": str(creds["expiry_time"])
+            }
+
+            return creds
 
         return fetch
