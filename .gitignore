@@ -7,7 +7,9 @@
 .idea/
 run.sh
 .env
+env
 test.py
+cognito_credentials
 
 # CMake
 cmake-build-debug/
