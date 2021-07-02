@@ -5,7 +5,7 @@ from setuptools import setup
 
 setup(
     name="cognitoinator",
-    version="0.2.0",
+    version="0.2.1",
     description="Log into Cognito, assume an IAM role, directly access JWT's from your Cognito session, and use boto3 all with Cognito credentials",
     author="Mathew Moon",
     author_email="mmoon@quinovas.com",

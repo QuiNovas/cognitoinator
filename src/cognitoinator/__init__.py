@@ -1,12 +1,15 @@
-from os import environ, path, access, W_OK
-from pathlib import Path
+from logging import getLogger
 from io import StringIO
+from os import environ, path
+from pathlib import Path
 from boto3.session import Session as botosession
 from botocore.configloader import load_config
 from botocore.session import Session as coresession
 from .providers import CognitoIdentity, TokenFetcher, TokenCache
 
 COGNITO_DEFAULT_SESSION = None
+LOGGER = getLogger()
+LOGGER.setLevel(environ.get("COGNITO_LOG_LEVEL", "INFO"))
 
 
 def _get_default_session(**kwargs) -> botosession:
@@ -60,12 +63,12 @@ def Session(**kwargs) -> botosession:
     bc_session = coresession()
 
     # Clean our own kwargs out so that we can pass the remainder to boto.
-    if "region_name" in kwargs and "region" in kwargs.get("config", {}):
+    if kwargs.get("region_name") is not None and "region" in kwargs.get("config", {}):
         del kwargs["config"]["region"]
 
     session_args = {k: kwargs[k] for k in kwargs if k not in args_to_remove}
     session_args["botocore_session"] = bc_session
-
+    session_args["region_name"] = kwargs.get("region_name") or config.get("region") or config.get("aws_default_region") or environ.get("AWS_DEFAULT_REGION")
     session = botosession(**session_args)
 
     # Now we set the session so when we get the token's getter properties we
