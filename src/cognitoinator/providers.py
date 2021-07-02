@@ -220,8 +220,6 @@ class TokenFetcher():
             if self.is_expired(self.provider.token_cache.tokens.get("token_expires")):
                 self.provider.cognito_login()
 
-        LOGGER.debug(self.provider.token_cache.tokens)
-
         if server:
             self.start_server()
 
@@ -259,7 +257,6 @@ class TokenFetcher():
 
     def login_loop(self):
         while True:
-            # while datetime.datetime.now(tzlocal()) > parse(self.provider.token_cache.tokens["token_expires"]) - datetime.timedelta(seconds=30):
             if self.is_expired(self.provider.token_cache.tokens["token_expires"]):
                 self.provider.cognito_login()
             sleep(5)
@@ -420,7 +417,6 @@ class CognitoIdentity(CredentialProvider):
 
     def _refresh_auth(self) -> dict:
         LOGGER.debug("Refreshing auth")
-        LOGGER.debug(f"Using Refresh Token {self.token_cache.tokens['refresh_token']}")
         AUTH_PARAMETERS = {"REFRESH_TOKEN": self.token_cache.tokens["refresh_token"]}
         try:
             auth = self.IDP.initiate_auth(
