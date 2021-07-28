@@ -5,7 +5,7 @@ from pathlib import Path
 from boto3.session import Session as botosession
 from botocore.configloader import load_config
 from botocore.session import Session as coresession
-from .providers import CognitoIdentity, TokenFetcher, TokenCache
+from .providers import CognitoIdentity, CognitoConfig, TokenCache
 
 COGNITO_DEFAULT_SESSION = None
 LOGGER = getLogger()
@@ -50,7 +50,7 @@ def Session(**kwargs) -> botosession:
         token_cache = TokenCache(cache_io)
 
     opts = {
-        "config": config,
+        "config": CognitoConfig(config),
         "token_cache": token_cache
     }
 
