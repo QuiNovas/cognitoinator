@@ -56,6 +56,7 @@ class Config(NamedTuple):
     region_name: str = None
     identity_pool_id: str = None
     role_arn: str = None
+    auth_type: str = "user_srp"
     auth_flow: str = "enhanced"
     role_session_name: str = None
     metadata: dict = {}
@@ -96,10 +97,10 @@ def _raise_for_invalid_auth_type(auth_type: str) -> None:
 
 def _raise_for_invalid_auth_flow(flow: str) -> None:
     try:
-        AuthType[flow]
+        AuthFlow[flow]
     except KeyError:
         raise TypeError(
-            "Unknown auth flow {flow}. Must be one of 'classic' or 'enhanced'")
+            f"Unknown auth flow {flow}. Must be one of 'classic' or 'enhanced'")
 
 
 class TokenCache:
@@ -187,7 +188,7 @@ class TokenFetcher:
     def __init__(
         self,
         *,
-        auth_type: str = "user_srp",
+        auth_type: str = None,
         config: Union[CognitoConfig, dict] = {},
         region_name: Optional[str] = None,
         server: bool = False,
@@ -195,6 +196,7 @@ class TokenFetcher:
         non_blocking: bool = False
     ):
 
+        auth_type = auth_type or config.get("auth_type") or "user_srp"
         _raise_for_invalid_auth_type(auth_type)
 
         self.non_blocking = non_blocking
